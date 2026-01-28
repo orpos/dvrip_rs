@@ -1,10 +1,9 @@
 # dvrip-rs
 
 A high-performance Rust library for the **DVRIP** protocol.
-
 This library is a port of the original Python implementation, optimized for concurrency
-
 Each feature is separated as an trait so you can use only the features you need.
+this packet was made for use with another program i am still making
 
 ## Features
 
@@ -27,7 +26,7 @@ Add `dvrip` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-dvrip = { git = "https://github.com/orpos/dvrip-rs" }
+dvrip = { git = "https://github.com/orpos/dvrip_rs" }
 tokio = { version = "1.0", features = ["full"] }
 ```
 
