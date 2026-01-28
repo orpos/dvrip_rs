@@ -2,6 +2,10 @@
 name = "dvrip-rs"
 version = "0.1.0"
 edition = "2024"
+description = "A Rust library for interacting with DVR-IP devices ported from python-dvr."
+license = "MIT"
+authors = ["orpos"]
+repository = "https://github.com/orpos/dvrip_rs"
 
 [dependencies]
 async-trait = "0.1.89"
