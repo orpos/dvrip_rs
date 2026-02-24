@@ -41,7 +41,39 @@ impl PacketHeader {
     }
 }
 
-pub async fn send_packet<W: AsyncWrite + Unpin>(
+pub async fn pack_packet(
+    session: u32,
+    packet_count: u32,
+    msg_id: u16,
+    data: &[u8],
+    version: u8,
+    add_tail: bool,
+) -> Result<(PacketHeader, Vec<u8>)> {
+    let tail: &[u8] = if !add_tail {
+        b""
+    } else if version == 0 {
+        b"\x0a\x00"
+    } else {
+        b"\x00"
+    };
+    let data_len = (data.len() + tail.len()) as u32;
+
+    let header = PacketHeader {
+        head: 255,
+        version,
+        session,
+        packet_count,
+        msg_id,
+        data_len,
+    };
+
+    let mut result = vec![];
+    result.extend_from_slice(data);
+    result.extend_from_slice(tail);
+    Ok((header, result))
+}
+
+pub async fn write_packet<W: AsyncWrite + Unpin>(
     writer: &mut W,
     session: u32,
     packet_count: u32,
@@ -141,6 +173,21 @@ pub async fn receive_data<R: AsyncRead + Unpin>(
     }
 
     Ok(buf)
+}
+
+pub async fn unpack_json(data: &[u8]) -> Result<Value> {
+    let json_data =
+        if data.len() >= 2 && data[data.len() - 2] == 0x0a && data[data.len() - 1] == 0x00 {
+            &data[..data.len() - 2]
+        } else if data.len() >= 1 && data[data.len() - 1] == 0x00 {
+            &data[..data.len() - 1]
+        } else {
+            data
+        };
+
+    let json_str = String::from_utf8_lossy(json_data);
+    serde_json::from_str(&json_str)
+        .map_err(|e| DVRIPError::SerializationError(format!("Error parsing JSON: {}", e)))
 }
 
 pub async fn receive_json<R: AsyncRead + Unpin>(

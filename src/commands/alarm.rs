@@ -11,19 +11,19 @@ pub type AlarmCallback = Box<dyn Fn(Value, u32) + Send + Sync>;
 #[async_trait]
 pub trait Alarm: Send + Sync {
     /// Set the alarm callback function
-    fn set_alarm_callback(&mut self, callback: Option<AlarmCallback>);
+    fn set_alarm_callback(&self, callback: Option<AlarmCallback>);
 
     /// Clear the alarm callback
-    fn clear_alarm_callback(&mut self);
+    fn clear_alarm_callback(&self);
 
     /// Start alarm monitoring
-    async fn start_alarm_monitoring(&mut self) -> Result<()>;
+    async fn start_alarm_monitoring(&self) -> Result<()>;
 
     /// Stop alarm monitoring
-    async fn stop_alarm_monitoring(&mut self) -> Result<()>;
+    async fn stop_alarm_monitoring(&self) -> Result<()>;
 
     /// Set remote alarm
-    async fn set_remote_alarm(&mut self, state: bool) -> Result<bool>;
+    async fn set_remote_alarm(&self, state: bool) -> Result<bool>;
 
     /// Check if monitoring alarms
     fn is_alarm_monitoring(&self) -> bool;
@@ -31,7 +31,7 @@ pub trait Alarm: Send + Sync {
 
 #[async_trait]
 impl Alarm for DVRIPCam {
-    fn set_alarm_callback(&mut self, callback: Option<AlarmCallback>) {
+    fn set_alarm_callback(&self, callback: Option<AlarmCallback>) {
         let alarm_cb = self.alarm_callback.clone();
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
@@ -45,7 +45,7 @@ impl Alarm for DVRIPCam {
         }
     }
 
-    fn clear_alarm_callback(&mut self) {
+    fn clear_alarm_callback(&self) {
         let alarm_cb = self.alarm_callback.clone();
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
@@ -58,7 +58,7 @@ impl Alarm for DVRIPCam {
         }
     }
 
-    async fn start_alarm_monitoring(&mut self) -> Result<()> {
+    async fn start_alarm_monitoring(&self) -> Result<()> {
         let reply = self
             .get_command(
                 "",
@@ -75,22 +75,17 @@ impl Alarm for DVRIPCam {
         }
 
         self.alarm_monitoring.store(true, Ordering::Release);
-        self.start_alarm_worker().await;
 
         Ok(())
     }
 
-    async fn stop_alarm_monitoring(&mut self) -> Result<()> {
+    async fn stop_alarm_monitoring(&self) -> Result<()> {
         self.alarm_monitoring.store(false, Ordering::Release);
 
-        if let Some(handle) = self.alarm_handle.lock().await.take() {
-            handle.abort();
-        }
-
         Ok(())
     }
 
-    async fn set_remote_alarm(&mut self, state: bool) -> Result<bool> {
+    async fn set_remote_alarm(&self, state: bool) -> Result<bool> {
         let data = serde_json::json!({
             "Event": 0,
             "State": state,

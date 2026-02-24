@@ -1,5 +1,6 @@
 pub mod alarm;
 pub mod authentication;
+pub mod backchannel;
 pub mod connection;
 pub mod file_management;
 pub mod monitoring;
@@ -10,6 +11,7 @@ pub mod user_management;
 
 pub use alarm::{Alarm, AlarmCallback};
 pub use authentication::Authentication;
+pub use backchannel::{AudioCodec, Backchannel};
 pub use connection::Connection;
 pub use file_management::FileManagement;
 pub use monitoring::{FrameCallback, FrameMetadata, Monitoring};

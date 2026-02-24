@@ -1,8 +1,6 @@
-use crate::Authentication;
 use crate::constants::OK_CODES;
 use crate::dvrip::DVRIPCam;
 use crate::error::Result;
-use crate::protocol::{receive_json, receive_packet_header, send_packet};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -14,11 +12,11 @@ pub type UpgradeProgressCallback = Box<dyn Fn(String) + Send + Sync>;
 #[async_trait]
 pub trait Upgrade: Send + Sync {
     /// Get upgrade information
-    async fn get_upgrade_info(&mut self) -> Result<Value>;
+    async fn get_upgrade_info(&self) -> Result<Value>;
 
     /// Perform system upgrade
     async fn upgrade(
-        &mut self,
+        &self,
         filename: &str,
         packet_size: usize,
         progress_callback: Option<UpgradeProgressCallback>,
@@ -27,12 +25,12 @@ pub trait Upgrade: Send + Sync {
 
 #[async_trait]
 impl Upgrade for DVRIPCam {
-    async fn get_upgrade_info(&mut self) -> Result<Value> {
+    async fn get_upgrade_info(&self) -> Result<Value> {
         self.get_command("OPSystemUpgrade", None).await
     }
 
     async fn upgrade(
-        &mut self,
+        &self,
         filename: &str,
         packet_size: usize,
         progress_callback: Option<UpgradeProgressCallback>,
@@ -62,80 +60,151 @@ impl Upgrade for DVRIPCam {
         let file_size = file_metadata.len() as usize;
         let mut sent_bytes = 0usize;
 
-        let mut stream_guard = self.stream.lock().await;
-        if let Some(s) = stream_guard.as_mut() {
-            let (mut reader, mut writer) = s.split();
-            let session = self.session_id();
+        let pool = self.send_pool.as_ref().clone().ok_or_else(|| {
+            crate::error::DVRIPError::ConnectionError("Did you connect to the camera?".to_string())
+        })?;
 
-            loop {
-                let mut buffer = vec![0u8; packet_size];
-                let bytes_read = file.read(&mut buffer).await?;
+        let session = self.session_id();
+        let upgrade_msg_id = 0x5F2;
 
-                if bytes_read == 0 {
-                    break;
-                }
+        loop {
+            let mut buffer = vec![0u8; packet_size];
+            let bytes_read = file.read(&mut buffer).await?;
 
-                buffer.truncate(bytes_read);
+            if bytes_read == 0 {
+                break;
+            }
 
-                send_packet(&mut writer, session, blocknum, 0x5F2, &buffer, 0).await?;
+            buffer.truncate(bytes_read);
+            buffer.extend_from_slice(b"\x0a\x00"); // Append tail for version 0
 
-                blocknum += 1;
-                sent_bytes += bytes_read;
+            let header = crate::protocol::PacketHeader {
+                data_len: buffer.len() as u32,
+                msg_id: upgrade_msg_id,
+                packet_count: blocknum,
+                session,
+                head: 0xFF,
+                version: 0,
+            };
 
-                // Verificar resposta
-                let reply_header = receive_packet_header(&mut reader).await?;
-                if reply_header.msg_id == 0x5F2 {
-                    let reply_data =
-                        receive_json(&mut reader, reply_header.data_len as usize, self.timeout)
-                            .await?;
-                    if let Some(ret) = reply_data.get("Ret").and_then(|r| r.as_u64())
-                        && ret != 100
-                    {
-                        if let Some(cb) = &callback {
-                            cb("Upgrade failed".to_string());
-                        }
-                        return Ok(reply_data);
+            let (send, recv) =
+                tokio::sync::oneshot::channel::<(crate::protocol::PacketHeader, Vec<u8>)>();
+
+            let request = crate::dvrip::CommandRequest::new(header, buffer)
+                .with_response(send)
+                .with_counter(false)
+                .with_expected_response(upgrade_msg_id);
+
+            pool.send(request).await.map_err(|_| {
+                crate::error::DVRIPError::ConnectionError(
+                    "Failed to send upgrade packet".to_string(),
+                )
+            })?;
+
+            // Wait for partial ACK
+            let (reply_header, reply_data_raw) = recv.await.map_err(|_| {
+                crate::error::DVRIPError::ConnectionError(
+                    "Failed to receive upgrade response".to_string(),
+                )
+            })?;
+
+            if reply_header.msg_id == upgrade_msg_id {
+                let reply_data =
+                    serde_json::from_slice::<Value>(&reply_data_raw[..reply_data_raw.len() - 2])
+                        .map_err(|_| {
+                            crate::error::DVRIPError::SerializationError(
+                                "Failed to parse upgrade response".to_string(),
+                            )
+                        })?;
+
+                if let Some(ret) = reply_data.get("Ret").and_then(|r| r.as_u64())
+                    && ret != 100
+                {
+                    if let Some(cb) = &callback {
+                        cb("Upgrade failed".to_string());
                     }
-                }
-
-                // Progress
-                if let Some(cb) = &callback {
-                    let progress = (sent_bytes as f64 / file_size as f64) * 100.0;
-                    cb(format!("Uploading: {:.1}%", progress));
+                    return Ok(reply_data);
                 }
             }
 
-            let final_packet = vec![0u8; 0];
-            send_packet(&mut writer, session, blocknum, 0x5F2, &final_packet, 0).await?;
+            blocknum += 1;
+            sent_bytes += bytes_read;
 
-            // Wait for upgrade start confirmation
-            loop {
-                let reply_header = receive_packet_header(&mut reader).await?;
-                let reply_data =
-                    receive_json(&mut reader, reply_header.data_len as usize, self.timeout).await?;
-
-                if let Some(ret) = reply_data.get("Ret").and_then(|r| r.as_u64()) {
-                    if ret == 515 {
-                        if let Some(cb) = &callback {
-                            cb("Upgrade successful".to_string());
-                        }
-                        return Ok(reply_data);
-                    } else if [512, 513, 514].contains(&(ret as u32)) {
-                        if let Some(cb) = &callback {
-                            cb("Upgrade failed".to_string());
-                        }
-                        return Ok(reply_data);
-                    } else if ret <= 100
-                        && let Some(cb) = &callback
-                    {
-                        cb(format!("Upgrading: {}%", ret));
-                    }
-                }
+            // Progress
+            if let Some(cb) = &callback {
+                let progress = (sent_bytes as f64 / file_size as f64) * 100.0;
+                cb(format!("Uploading: {:.1}%", progress));
             }
         }
 
-        Err(crate::error::DVRIPError::ConnectionError(
-            "Stream not available".to_string(),
-        ))
+        let mut final_packet = vec![0u8; 0];
+        final_packet.extend_from_slice(b"\x0a\x00");
+        let header = crate::protocol::PacketHeader {
+            data_len: final_packet.len() as u32,
+            msg_id: upgrade_msg_id,
+            packet_count: blocknum,
+            session,
+            head: 0xFF,
+            version: 0,
+        };
+        let (send, recv) =
+            tokio::sync::oneshot::channel::<(crate::protocol::PacketHeader, Vec<u8>)>();
+
+        let request = crate::dvrip::CommandRequest::new(header, final_packet)
+            .with_response(send)
+            .with_counter(false)
+            .with_expected_response(upgrade_msg_id);
+
+        pool.send(request).await.map_err(|_| {
+            crate::error::DVRIPError::ConnectionError(
+                "Failed to send final upgrade packet".to_string(),
+            )
+        })?;
+
+        let _ = recv.await; // Consume the immediate ACK for the empty packet
+
+        // Wait for upgrade start confirmation (persistent listener)
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        self.stream_handlers.insert(upgrade_msg_id, tx);
+
+        let result = async {
+            loop {
+                // Wait for packets with 0x5F2
+                if let Some((_, reply_data_raw)) = rx.recv().await {
+                    let reply_data = match serde_json::from_slice::<Value>(
+                        &reply_data_raw[..reply_data_raw.len() - 2],
+                    ) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+
+                    if let Some(ret) = reply_data.get("Ret").and_then(|r| r.as_u64()) {
+                        if ret == 515 {
+                            if let Some(cb) = &callback {
+                                cb("Upgrade successful".to_string());
+                            }
+                            return Ok(reply_data);
+                        } else if [512, 513, 514].contains(&(ret as u32)) {
+                            if let Some(cb) = &callback {
+                                cb("Upgrade failed".to_string());
+                            }
+                            return Ok(reply_data);
+                        } else if ret <= 100
+                            && let Some(cb) = &callback
+                        {
+                            cb(format!("Upgrading: {}%", ret));
+                        }
+                    }
+                } else {
+                    return Err(crate::error::DVRIPError::ConnectionError(
+                        "Stream closed unexpectedly".to_string(),
+                    ));
+                }
+            }
+        }
+        .await;
+
+        self.stream_handlers.remove(&upgrade_msg_id);
+        result
     }
 }

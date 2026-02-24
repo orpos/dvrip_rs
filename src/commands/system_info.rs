@@ -1,6 +1,6 @@
 use crate::constants::DATE_FORMAT;
+use crate::dvrip::DVRIPCam;
 use crate::error::Result;
-use crate::{Authentication, dvrip::DVRIPCam};
 use async_trait::async_trait;
 use chrono::{DateTime, Local, NaiveDateTime};
 use serde_json::Value;
@@ -8,65 +8,65 @@ use serde_json::Value;
 #[async_trait]
 pub trait SystemInfo: Send + Sync {
     /// Get general system information
-    async fn get_system_info(&mut self) -> Result<Value>;
+    async fn get_system_info(&self) -> Result<Value>;
 
     /// Get general information
-    async fn get_general_info(&mut self) -> Result<Value>;
+    async fn get_general_info(&self) -> Result<Value>;
 
     /// Get network information
-    async fn get_network_info(&mut self) -> Result<Value>;
+    async fn get_network_info(&self) -> Result<Value>;
 
     /// Get encoding capabilities
-    async fn get_encode_capabilities(&mut self) -> Result<Value>;
+    async fn get_encode_capabilities(&self) -> Result<Value>;
 
     /// Get system capabilities
-    async fn get_system_capabilities(&mut self) -> Result<Value>;
+    async fn get_system_capabilities(&self) -> Result<Value>;
 
     /// Get camera information
-    async fn get_camera_info(&mut self, default_config: bool) -> Result<Value>;
+    async fn get_camera_info(&self, default_config: bool) -> Result<Value>;
 
     /// Get encoding information
-    async fn get_encode_info(&mut self, default_config: bool) -> Result<Value>;
+    async fn get_encode_info(&self, default_config: bool) -> Result<Value>;
 
     /// Get current device time
-    async fn get_time(&mut self) -> Result<DateTime<Local>>;
+    async fn get_time(&self) -> Result<DateTime<Local>>;
 
     /// Set device time
-    async fn set_time(&mut self, time: Option<DateTime<Local>>) -> Result<bool>;
+    async fn set_time(&self, time: Option<DateTime<Local>>) -> Result<bool>;
 
     /// Get channel titles
-    async fn get_channel_titles(&mut self) -> Result<Vec<String>>;
+    async fn get_channel_titles(&self) -> Result<Vec<String>>;
 
     /// Set channel titles
-    async fn set_channel_titles(&mut self, titles: Vec<String>) -> Result<bool>;
+    async fn set_channel_titles(&self, titles: Vec<String>) -> Result<bool>;
 
     /// Get channel statuses
-    async fn get_channel_statuses(&mut self) -> Result<Value>;
+    async fn get_channel_statuses(&self) -> Result<Value>;
 }
 
 #[async_trait]
 impl SystemInfo for DVRIPCam {
-    async fn get_system_info(&mut self) -> Result<Value> {
+    async fn get_system_info(&self) -> Result<Value> {
         self.get_command("SystemInfo", None).await
     }
 
-    async fn get_general_info(&mut self) -> Result<Value> {
+    async fn get_general_info(&self) -> Result<Value> {
         self.get_command("General", None).await
     }
 
-    async fn get_network_info(&mut self) -> Result<Value> {
+    async fn get_network_info(&self) -> Result<Value> {
         self.get_command("NetWork.NetCommon", None).await
     }
 
-    async fn get_encode_capabilities(&mut self) -> Result<Value> {
+    async fn get_encode_capabilities(&self) -> Result<Value> {
         self.get_command("EncodeCapability", None).await
     }
 
-    async fn get_system_capabilities(&mut self) -> Result<Value> {
+    async fn get_system_capabilities(&self) -> Result<Value> {
         self.get_command("SystemFunction", None).await
     }
 
-    async fn get_camera_info(&mut self, default_config: bool) -> Result<Value> {
+    async fn get_camera_info(&self, default_config: bool) -> Result<Value> {
         let code = if default_config {
             Some(1044)
         } else {
@@ -75,7 +75,7 @@ impl SystemInfo for DVRIPCam {
         self.get_command("Camera", code).await
     }
 
-    async fn get_encode_info(&mut self, default_config: bool) -> Result<Value> {
+    async fn get_encode_info(&self, default_config: bool) -> Result<Value> {
         let code = if default_config {
             Some(1044)
         } else {
@@ -84,7 +84,7 @@ impl SystemInfo for DVRIPCam {
         self.get_command("Simplify.Encode", code).await
     }
 
-    async fn get_time(&mut self) -> Result<DateTime<Local>> {
+    async fn get_time(&self) -> Result<DateTime<Local>> {
         let time_str = self
             .get_command("OPTimeQuery", None)
             .await?
@@ -104,7 +104,7 @@ impl SystemInfo for DVRIPCam {
         ))
     }
 
-    async fn set_time(&mut self, time: Option<DateTime<Local>>) -> Result<bool> {
+    async fn set_time(&self, time: Option<DateTime<Local>>) -> Result<bool> {
         let time_to_set = time.unwrap_or_else(Local::now);
         let time_str = time_to_set.format(DATE_FORMAT).to_string();
 
@@ -117,7 +117,7 @@ impl SystemInfo for DVRIPCam {
         Ok(false)
     }
 
-    async fn get_channel_titles(&mut self) -> Result<Vec<String>> {
+    async fn get_channel_titles(&self) -> Result<Vec<String>> {
         let data = self.get_command("ChannelTitle", Some(1048)).await?;
         if let Some(titles) = data.as_array() {
             return Ok(titles
@@ -128,7 +128,7 @@ impl SystemInfo for DVRIPCam {
         Ok(vec![])
     }
 
-    async fn set_channel_titles(&mut self, titles: Vec<String>) -> Result<bool> {
+    async fn set_channel_titles(&self, titles: Vec<String>) -> Result<bool> {
         let session = self.session_id();
         let data = serde_json::json!({
             "ChannelTitle": titles,
@@ -143,7 +143,7 @@ impl SystemInfo for DVRIPCam {
         Ok(false)
     }
 
-    async fn get_channel_statuses(&mut self) -> Result<Value> {
+    async fn get_channel_statuses(&self) -> Result<Value> {
         self.get_command("NetWork.ChnStatus", None).await
     }
 }

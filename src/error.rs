@@ -17,6 +17,9 @@ pub enum DVRIPError {
     #[error("Serialization error: {0}")]
     SerializationError(String),
 
+    #[error("Not initialized")]
+    NotInitialized(),
+
     #[error("Unknown error: {0}")]
     Unknown(String),
 }

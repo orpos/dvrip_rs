@@ -14,12 +14,12 @@ This crate was made for use with another program i am still making but i decided
 - [x] **Real-time Monitoring**: Stream live video (H.264/H.265) directly from the device.
 - [x] **Video Recording**: Save streams to local storage.
 - [x] **System Information**: Retrieve device hardware and software details.
-- [ ] **User Management**: Manage accounts and permissions. ( some apis are not tested yet )
+- [x] **User Management**: Manage accounts and permissions. ( WIP )
 - [x] **PTZ Control**: Remote Pan, Tilt, and Zoom operations.
-- [ ] **Alarm Monitoring**: Asynchronous callback system for alarm events. ( some apis are not tested yet )
+- [x] **Alarm Monitoring**: Asynchronous callback system for alarm events. ( WIP )
 - [x] **File Management**: List and search for recordings on the device.
-- [ ] **Upgrade**: Upgrade the device firmware. ( some apis are not tested yet, and this is very risky )
-- [ ] **Backchannel**: Two-way audio communication. (not done yet)
+- [x] **Upgrade**: Upgrade the device firmware. ( WIP )
+- [ ] **Backchannel**: Two-way audio communication. (it works but lags for some reason, i will investigate)
 
 ## Quick Start
 
@@ -75,10 +75,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
-
-## Protocol Details
-
-The library implements the custom binary header used by DVRIP devices, followed by JSON payloads for commands and binary data for media streams.
 
 ## Credits & References
 

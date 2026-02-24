@@ -23,7 +23,7 @@ pub trait Authentication: Send + Sync {
 
     /// Change user password
     async fn change_password(
-        &mut self,
+        &self,
         old_password: &str,
         new_password: &str,
         username: Option<&str>,
@@ -84,7 +84,7 @@ impl Authentication for DVRIPCam {
     }
 
     async fn change_password(
-        &mut self,
+        &self,
         old_password: &str,
         new_password: &str,
         username: Option<&str>,

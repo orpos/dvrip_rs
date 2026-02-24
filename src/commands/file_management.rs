@@ -1,6 +1,5 @@
 use crate::dvrip::DVRIPCam;
 use crate::error::Result;
-use crate::protocol::{receive_data, receive_packet_header};
 use async_trait::async_trait;
 use chrono::{DateTime, Local};
 use serde_json::{Value, json};
@@ -11,7 +10,7 @@ use tokio::{fs::File, io::AsyncWriteExt};
 pub trait FileManagement: Send + Sync {
     /// List local files on the device
     async fn list_local_files(
-        &mut self,
+        &self,
         start_time: DateTime<Local>,
         end_time: DateTime<Local>,
         file_type: &str,
@@ -20,7 +19,7 @@ pub trait FileManagement: Send + Sync {
 
     /// Download a file from the device
     async fn download_file(
-        &mut self,
+        &self,
         start_time: DateTime<Local>,
         end_time: DateTime<Local>,
         filename: &str,
@@ -31,7 +30,7 @@ pub trait FileManagement: Send + Sync {
 #[async_trait]
 impl FileManagement for DVRIPCam {
     async fn list_local_files(
-        &mut self,
+        &self,
         start_time: DateTime<Local>,
         end_time: DateTime<Local>,
         file_type: &str,
@@ -73,57 +72,55 @@ impl FileManagement for DVRIPCam {
         // OPFileQuery only returns the first 64 items
         // We need to keep querying until we get all
         while let Some(files) = reply.get("OPFileQuery").and_then(|f| f.as_array()) {
-            if files.len() == 64 {
-                if let Some(last_file) = files.last() {
-                    if let Some(new_start) = last_file.get("BeginTime").and_then(|t| t.as_str()) {
-                        let data = json!({
-                            "Name": "OPFileQuery",
-                            "OPFileQuery": {
-                                "BeginTime": new_start,
-                                "Channel": channel,
-                                "DriverTypeMask": "0x0000FFFF",
-                                "EndTime": end_str,
-                                "Event": "*",
-                                "StreamType": "0x00000000",
-                                "Type": file_type,
-                            },
-                        });
+            if files.len() != 64 {
+                break;
+            };
 
-                        reply = self.send_command(1440, data, true).await?.ok_or_else(|| {
-                            crate::error::DVRIPError::ProtocolError("Resposta vazia".to_string())
-                        })?;
+            let Some(last_file) = files.last() else {
+                break;
+            };
 
-                        if let Some(new_files) = reply.get("OPFileQuery").and_then(|f| f.as_array())
-                        {
-                            if new_files.is_empty() {
-                                break;
-                            }
-                            result.extend(new_files.clone());
-                        } else {
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            } else {
+            let Some(new_start) = last_file.get("BeginTime").and_then(|t| t.as_str()) else {
+                break;
+            };
+
+            let data = json!({
+                "Name": "OPFileQuery",
+                "OPFileQuery": {
+                    "BeginTime": new_start,
+                    "Channel": channel,
+                    "DriverTypeMask": "0x0000FFFF",
+                    "EndTime": end_str,
+                    "Event": "*",
+                    "StreamType": "0x00000000",
+                    "Type": file_type,
+                },
+            });
+
+            reply = self.send_command(1440, data, true).await?.ok_or_else(|| {
+                crate::error::DVRIPError::ProtocolError("Resposta vazia".to_string())
+            })?;
+
+            let Some(new_files) = reply.get("OPFileQuery").and_then(|f| f.as_array()) else {
+                break;
+            };
+
+            if new_files.is_empty() {
                 break;
             }
+            result.extend(new_files.clone());
         }
 
         Ok(result)
     }
 
     async fn download_file(
-        &mut self,
+        &self,
         start_time: DateTime<Local>,
         end_time: DateTime<Local>,
         filename: &str,
         target_path: &str,
     ) -> Result<()> {
-        // Create directory if it doesn't exist
         if let Some(parent) = Path::new(target_path).parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -150,6 +147,13 @@ impl FileManagement for DVRIPCam {
 
         self.send_command(1424, claim_data, true).await?;
 
+        // Prepare stream listener
+        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+        let stream_ids = [0x1FC, 0x1FD, 0x1FA, 0x1F9, 0x5FC, 0x0592]; // Standard media + explicit stream ID
+        for &id in &stream_ids {
+            self.stream_handlers.insert(id, tx.clone());
+        }
+
         // DownloadStart
         let download_start_data = json!({
             "Name": "OPPlayBack",
@@ -169,35 +173,20 @@ impl FileManagement for DVRIPCam {
 
         self.send_command(1420, download_start_data, false).await?;
 
-        // Receber dados do arquivo
-        {
-            let mut stream_guard = self.stream.lock().await;
-            if let Some(s) = stream_guard.as_mut() {
-                let (mut reader, _) = s.split();
+        // Receive data and write to file
+        let mut file = File::create(target_path).await?;
 
-                // Ler header
-                let header = receive_packet_header(&mut reader).await?;
-
-                // Ler primeiro chunk
-                let mut file_data =
-                    receive_data(&mut reader, header.data_len as usize, self.timeout).await?;
-
-                // Continue reading chunks until receiving one with data_len == 0
-                loop {
-                    let next_header = receive_packet_header(&mut reader).await?;
-                    if next_header.data_len == 0 {
-                        break;
-                    }
-                    let chunk =
-                        receive_data(&mut reader, next_header.data_len as usize, self.timeout)
-                            .await?;
-                    file_data.extend_from_slice(&chunk);
-                }
-                // Escrever arquivo
-                let mut file = File::create(target_path).await?;
-                file.write_all(&file_data).await?;
-                file.sync_all().await?;
+        while let Some((header, data)) = rx.recv().await {
+            if header.data_len == 0 {
+                break;
             }
+            file.write_all(&data).await?;
+        }
+        file.sync_all().await?;
+
+        // Cleanup handlers
+        for &id in &stream_ids {
+            self.stream_handlers.remove(&id);
         }
 
         // DownloadStop

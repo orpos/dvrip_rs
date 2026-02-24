@@ -1,14 +1,10 @@
-use crate::Authentication;
 use crate::constants::{OK_CODES, QCODES};
 use crate::dvrip::DVRIPCam;
 use crate::error::Result;
-use crate::protocol::{receive_data, receive_packet_header};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use serde_json::json;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use tokio::io::AsyncReadExt;
 
 #[derive(Debug)]
 pub struct FrameMetadata {
@@ -25,18 +21,14 @@ pub type FrameCallback = Box<dyn Fn(Vec<u8>, FrameMetadata) + Send + Sync>;
 #[async_trait]
 pub trait Monitoring: Send + Sync {
     /// Start video monitoring
-    async fn start_monitor(
-        &mut self,
-        callback: FrameCallback,
-        stream: &str,
-        channel: u8,
-    ) -> Result<()>;
+    async fn start_monitor(&self, callback: FrameCallback, stream: &str, channel: u8)
+    -> Result<()>;
 
     /// Stop video monitoring
-    async fn stop_monitor(&mut self) -> Result<()>;
+    async fn stop_monitor(&self) -> Result<()>;
 
     /// Get a snapshot (screenshot)
-    async fn snapshot(&mut self, channel: u8) -> Result<Vec<u8>>;
+    async fn snapshot(&self, channel: u8) -> Result<Vec<u8>>;
 
     /// Check if monitoring
     fn is_monitoring(&self) -> bool;
@@ -45,7 +37,7 @@ pub trait Monitoring: Send + Sync {
 #[async_trait]
 impl Monitoring for DVRIPCam {
     async fn start_monitor(
-        &mut self,
+        &self,
         callback: FrameCallback,
         stream: &str,
         channel: u8,
@@ -85,40 +77,17 @@ impl Monitoring for DVRIPCam {
         self.monitoring.store(true, Ordering::Release);
 
         // Iniciar worker de monitoramento
-        let stream_clone = self.stream.clone();
-        let monitoring_flag = self.monitoring.clone();
-        let timeout = self.timeout;
-        let callback = Arc::new(callback);
-
-        tokio::spawn(async move {
-            while monitoring_flag.load(Ordering::Acquire) {
-                let mut stream_guard = stream_clone.lock().await;
-                if let Some(s) = stream_guard.as_mut() {
-                    let (mut reader, _) = s.split();
-
-                    match DVRIPCam::reassemble_bin_payload_static(&mut reader, timeout).await {
-                        Ok((frame, metadata)) => {
-                            callback(frame, metadata);
-                        }
-                        Err(_) => {
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                        }
-                    }
-                } else {
-                    break;
-                }
-            }
-        });
+        *self.frame_callback.lock().await = Some(callback);
 
         Ok(())
     }
 
-    async fn stop_monitor(&mut self) -> Result<()> {
+    async fn stop_monitor(&self) -> Result<()> {
         self.monitoring.store(false, Ordering::Release);
         Ok(())
     }
 
-    async fn snapshot(&mut self, channel: u8) -> Result<Vec<u8>> {
+    async fn snapshot(&self, channel: u8) -> Result<Vec<u8>> {
         let session = self.session_id();
         let data = json!({
             "Name": "OPSNAP",
@@ -128,14 +97,12 @@ impl Monitoring for DVRIPCam {
             },
         });
 
-        self.send_command(QCODES.get("OPSNAP").copied().unwrap_or(1560), data, false)
+        let data = self
+            .send_command_recv_bin(QCODES.get("OPSNAP").copied().unwrap_or(1560), data, true)
             .await?;
 
-        let mut stream_guard = self.stream.lock().await;
-        if let Some(s) = stream_guard.as_mut() {
-            let (mut reader, _) = s.split();
-            let (frame, _) =
-                DVRIPCam::reassemble_bin_payload_static(&mut reader, self.timeout).await?;
+        if let Some(s) = data {
+            let (frame, _) = DVRIPCam::read_bin_payload_static(s).await?;
             return Ok(frame);
         }
 
@@ -150,9 +117,8 @@ impl Monitoring for DVRIPCam {
 }
 
 impl DVRIPCam {
-    pub(crate) async fn reassemble_bin_payload_static<R: AsyncReadExt + Unpin>(
-        reader: &mut R,
-        timeout: tokio::time::Duration,
+    pub(crate) async fn read_bin_payload_static(
+        packet: Vec<u8>,
     ) -> Result<(Vec<u8>, FrameMetadata)> {
         let mut metadata = FrameMetadata {
             width: None,
@@ -162,91 +128,67 @@ impl DVRIPCam {
             media_type: None,
             datetime: None,
         };
-
+        let mut buf: Vec<u8> = vec![];
         let mut length = 0u32;
-        let mut buf = Vec::new();
-        let start_time = tokio::time::Instant::now();
+        let frame_len;
 
-        loop {
-            if start_time.elapsed() > timeout {
-                return Err(crate::error::DVRIPError::ConnectionError(
-                    "Timeout receiving payload".to_string(),
-                ));
-            }
+        let data_type = BigEndian::read_u32(&packet[0..4]);
+        if data_type == 0x1FC || data_type == 0x1FE {
+            frame_len = 16;
+            if packet.len() >= frame_len {
+                let media = packet[4];
+                metadata.fps = Some(packet[5]);
+                let w = packet[6] as u32;
+                let h = packet[7] as u32;
+                let dt = LittleEndian::read_u32(&packet[8..12]);
+                length = LittleEndian::read_u32(&packet[12..16]);
 
-            let header = receive_packet_header(reader).await?;
-            let packet = receive_data(reader, header.data_len as usize, timeout).await?;
+                metadata.width = Some(w * 8);
+                metadata.height = Some(h * 8);
+                metadata.datetime = Some(Self::internal_to_datetime_static(dt));
 
-            let mut frame_len = 0usize;
-
-            if length == 0 {
-                if packet.len() < 4 {
-                    continue;
+                if data_type == 0x1FC {
+                    metadata.frame_type = Some("I".to_string());
                 }
 
-                let data_type = BigEndian::read_u32(&packet[0..4]);
-
-                if data_type == 0x1FC || data_type == 0x1FE {
-                    frame_len = 16;
-                    if packet.len() >= frame_len {
-                        let media = packet[4];
-                        metadata.fps = Some(packet[5]);
-                        let w = packet[6] as u32;
-                        let h = packet[7] as u32;
-                        let dt = LittleEndian::read_u32(&packet[8..12]);
-                        length = LittleEndian::read_u32(&packet[12..16]);
-
-                        metadata.width = Some(w * 8);
-                        metadata.height = Some(h * 8);
-                        metadata.datetime = Some(Self::internal_to_datetime_static(dt));
-
-                        if data_type == 0x1FC {
-                            metadata.frame_type = Some("I".to_string());
-                        }
-
-                        metadata.media_type = Self::internal_to_type_static(data_type, media);
-                    }
-                } else if data_type == 0x1FD {
-                    frame_len = 8;
-                    if packet.len() >= frame_len {
-                        length = LittleEndian::read_u32(&packet[4..8]);
-                        metadata.frame_type = Some("P".to_string());
-                    }
-                } else if data_type == 0x1FA {
-                    frame_len = 8;
-                    if packet.len() >= frame_len {
-                        let media = packet[4];
-                        let _samp_rate = LittleEndian::read_u16(&packet[5..7]);
-                        length = LittleEndian::read_u16(&packet[6..8]) as u32;
-                        metadata.media_type = Self::internal_to_type_static(data_type, media);
-                    }
-                } else if data_type == 0x1F9 {
-                    frame_len = 8;
-                    if packet.len() >= frame_len {
-                        let media = packet[4];
-                        let _n = packet[5];
-                        length = LittleEndian::read_u16(&packet[6..8]) as u32;
-                        metadata.media_type = Self::internal_to_type_static(data_type, media);
-                    }
-                } else if data_type == 0xFFD8FFE0 {
-                    return Ok((packet, metadata));
-                } else {
-                    return Err(crate::error::DVRIPError::ProtocolError(format!(
-                        "Unknown data type: 0x{:X}",
-                        data_type
-                    )));
-                }
+                metadata.media_type = Self::internal_to_type_static(data_type, media);
             }
-
-            if frame_len < packet.len() {
-                buf.extend_from_slice(&packet[frame_len..]);
+        } else if data_type == 0x1FD {
+            frame_len = 8;
+            if packet.len() >= frame_len {
+                length = LittleEndian::read_u32(&packet[4..8]);
+                metadata.frame_type = Some("P".to_string());
             }
-
-            if length > 0 && buf.len() >= length as usize {
-                buf.truncate(length as usize);
-                return Ok((buf, metadata));
+        } else if data_type == 0x1FA {
+            frame_len = 8;
+            if packet.len() >= frame_len {
+                let media = packet[4];
+                let _samp_rate = LittleEndian::read_u16(&packet[5..7]);
+                length = LittleEndian::read_u16(&packet[6..8]) as u32;
+                metadata.media_type = Self::internal_to_type_static(data_type, media);
             }
+        } else if data_type == 0x1F9 {
+            frame_len = 8;
+            if packet.len() >= frame_len {
+                let media = packet[4];
+                let _n = packet[5];
+                length = LittleEndian::read_u16(&packet[6..8]) as u32;
+                metadata.media_type = Self::internal_to_type_static(data_type, media);
+            }
+        } else if data_type == 0xFFD8FFE0 {
+            return Ok((packet, metadata));
+        } else {
+            return Err(crate::error::DVRIPError::ProtocolError(format!(
+                "Unknown data type: 0x{:X}",
+                data_type
+            )));
         }
+        if frame_len < packet.len() {
+            buf.extend_from_slice(&packet[frame_len..]);
+        }
+
+        buf.truncate(length as usize);
+        Ok((buf, metadata))
     }
 
     fn internal_to_type_static(data_type: u32, value: u8) -> Option<String> {

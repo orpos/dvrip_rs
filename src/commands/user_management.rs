@@ -1,4 +1,3 @@
-use crate::Authentication;
 use crate::constants::OK_CODES;
 use crate::dvrip::DVRIPCam;
 use crate::error::Result;
@@ -9,22 +8,17 @@ use serde_json::{Value, json};
 #[async_trait]
 pub trait UserManagement: Send + Sync {
     /// Get the list of authorities
-    async fn get_authority_list(&mut self) -> Result<Vec<Value>>;
+    async fn get_authority_list(&self) -> Result<Vec<Value>>;
 
     /// Get the list of groups
-    async fn get_groups(&mut self) -> Result<Vec<Value>>;
+    async fn get_groups(&self) -> Result<Vec<Value>>;
 
     /// Add a new group
-    async fn add_group(
-        &mut self,
-        name: &str,
-        comment: &str,
-        auth: Option<Vec<Value>>,
-    ) -> Result<bool>;
+    async fn add_group(&self, name: &str, comment: &str, auth: Option<Vec<Value>>) -> Result<bool>;
 
     /// Modify an existing group
     async fn modify_group(
-        &mut self,
+        &self,
         name: &str,
         newname: Option<&str>,
         comment: Option<&str>,
@@ -32,14 +26,14 @@ pub trait UserManagement: Send + Sync {
     ) -> Result<bool>;
 
     /// Delete a group
-    async fn delete_group(&mut self, name: &str) -> Result<bool>;
+    async fn delete_group(&self, name: &str) -> Result<bool>;
 
     /// Get the list of users
-    async fn get_users(&mut self) -> Result<Vec<Value>>;
+    async fn get_users(&self) -> Result<Vec<Value>>;
 
     /// Add a new user
     async fn add_user(
-        &mut self,
+        &self,
         name: &str,
         password: &str,
         comment: &str,
@@ -50,7 +44,7 @@ pub trait UserManagement: Send + Sync {
 
     /// Modify an existing user
     async fn modify_user(
-        &mut self,
+        &self,
         name: &str,
         newname: Option<&str>,
         comment: Option<&str>,
@@ -60,12 +54,12 @@ pub trait UserManagement: Send + Sync {
     ) -> Result<bool>;
 
     /// Delete a user
-    async fn delete_user(&mut self, name: &str) -> Result<bool>;
+    async fn delete_user(&self, name: &str) -> Result<bool>;
 }
 
 #[async_trait]
 impl UserManagement for DVRIPCam {
-    async fn get_authority_list(&mut self) -> Result<Vec<Value>> {
+    async fn get_authority_list(&self) -> Result<Vec<Value>> {
         let data = self.get_command("AuthorityList", None).await?;
         if let Some(auth_list) = data.get("AuthorityList").and_then(|v| v.as_array()) {
             return Ok(auth_list.clone());
@@ -73,7 +67,7 @@ impl UserManagement for DVRIPCam {
         Ok(vec![])
     }
 
-    async fn get_groups(&mut self) -> Result<Vec<Value>> {
+    async fn get_groups(&self) -> Result<Vec<Value>> {
         let data = self.get_command("Groups", None).await?;
         if let Some(groups) = data.get("Groups").and_then(|v| v.as_array()) {
             return Ok(groups.clone());
@@ -81,12 +75,7 @@ impl UserManagement for DVRIPCam {
         Ok(vec![])
     }
 
-    async fn add_group(
-        &mut self,
-        name: &str,
-        comment: &str,
-        auth: Option<Vec<Value>>,
-    ) -> Result<bool> {
+    async fn add_group(&self, name: &str, comment: &str, auth: Option<Vec<Value>>) -> Result<bool> {
         let auth_list = match auth {
             Some(a) => a,
             None => self.get_authority_list().await?,
@@ -108,7 +97,7 @@ impl UserManagement for DVRIPCam {
     }
 
     async fn modify_group(
-        &mut self,
+        &self,
         name: &str,
         newname: Option<&str>,
         comment: Option<&str>,
@@ -146,7 +135,7 @@ impl UserManagement for DVRIPCam {
         Ok(false)
     }
 
-    async fn delete_group(&mut self, name: &str) -> Result<bool> {
+    async fn delete_group(&self, name: &str) -> Result<bool> {
         let session = self.session_id();
         let data = json!({
             "Name": name,
@@ -160,7 +149,7 @@ impl UserManagement for DVRIPCam {
         Ok(false)
     }
 
-    async fn get_users(&mut self) -> Result<Vec<Value>> {
+    async fn get_users(&self) -> Result<Vec<Value>> {
         let data = self.get_command("Users", None).await?;
         if let Some(users) = data.get("Users").and_then(|v| v.as_array()) {
             return Ok(users.clone());
@@ -169,7 +158,7 @@ impl UserManagement for DVRIPCam {
     }
 
     async fn add_user(
-        &mut self,
+        &self,
         name: &str,
         password: &str,
         comment: &str,
@@ -213,7 +202,7 @@ impl UserManagement for DVRIPCam {
     }
 
     async fn modify_user(
-        &mut self,
+        &self,
         name: &str,
         newname: Option<&str>,
         comment: Option<&str>,
@@ -269,7 +258,7 @@ impl UserManagement for DVRIPCam {
         Ok(false)
     }
 
-    async fn delete_user(&mut self, name: &str) -> Result<bool> {
+    async fn delete_user(&self, name: &str) -> Result<bool> {
         let session = self.session_id();
         let data = json!({
             "Name": name,
