@@ -72,7 +72,7 @@ impl Backchannel for DVRIPCam {
     }
 
     async fn send_audio(&self, data: Vec<u8>) -> Result<()> {
-        let Some(codec) = self.codec.lock().await.clone() else {
+        let Some(codec) = *self.codec.lock().await else {
             return Err(crate::DVRIPError::NotInitialized());
         };
 

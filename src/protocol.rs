@@ -179,7 +179,7 @@ pub async fn unpack_json(data: &[u8]) -> Result<Value> {
     let json_data =
         if data.len() >= 2 && data[data.len() - 2] == 0x0a && data[data.len() - 1] == 0x00 {
             &data[..data.len() - 2]
-        } else if data.len() >= 1 && data[data.len() - 1] == 0x00 {
+        } else if !data.is_empty() && data[data.len() - 1] == 0x00 {
             &data[..data.len() - 1]
         } else {
             data
@@ -200,7 +200,7 @@ pub async fn receive_json<R: AsyncRead + Unpin>(
     let json_data =
         if data.len() >= 2 && data[data.len() - 2] == 0x0a && data[data.len() - 1] == 0x00 {
             &data[..data.len() - 2]
-        } else if data.len() >= 1 && data[data.len() - 1] == 0x00 {
+        } else if !data.is_empty() && data[data.len() - 1] == 0x00 {
             &data[..data.len() - 1]
         } else {
             &data

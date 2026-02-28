@@ -5,9 +5,10 @@ use crate::protocol::{PacketHeader, pack_packet, unpack_json};
 use crate::{AudioCodec, FrameMetadata};
 use dashmap::DashMap;
 use serde_json::{Value, json};
+use tokio::task::JoinHandle;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use tokio::sync::{self, Mutex, broadcast};
+use tokio::sync::{self, Mutex, broadcast, mpsc};
 use tokio::time::Duration;
 
 pub struct CommandRequest {
@@ -66,16 +67,15 @@ pub struct DVRIPCam {
 
     // Callbacks
     pub(crate) alarm_callback: Arc<Mutex<Option<AlarmCallback>>>,
-    // pub(crate) frame_callback: Arc<Mutex<Option<FrameCallback>>>,
     pub(crate) frame_sender: Arc<broadcast::Sender<(FrameMetadata, Vec<u8>)>>,
 
     // Background tasks
-    pub(crate) keep_alive_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
-    pub(crate) recv_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
-    pub(crate) send_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    pub(crate) keep_alive_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    pub(crate) recv_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    pub(crate) send_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 
     // Stream handlers for persistent listeners (e.g. file download)
-    pub(crate) stream_handlers: Arc<DashMap<u16, sync::mpsc::Sender<(PacketHeader, Vec<u8>)>>>,
+    pub(crate) stream_handlers: Arc<DashMap<u16, mpsc::Sender<(PacketHeader, Vec<u8>)>>>,
 
     // Configuration
     pub(crate) alive_time: Arc<AtomicU64>,

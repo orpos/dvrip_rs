@@ -66,7 +66,7 @@ impl FileManagement for DVRIPCam {
         }
 
         if let Some(files) = reply.get_mut("OPFileQuery").and_then(|f| f.as_array()) {
-            result.extend_from_slice(&files);
+            result.extend_from_slice(files);
         }
 
         // OPFileQuery only returns the first 64 items
