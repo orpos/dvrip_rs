@@ -1,13 +1,13 @@
-use crate::AudioCodec;
-use crate::commands::{AlarmCallback, FrameCallback};
+use crate::commands::AlarmCallback;
 use crate::constants::{OK_CODES, QCODES, TCP_PORT};
 use crate::error::{DVRIPError, Result};
 use crate::protocol::{PacketHeader, pack_packet, unpack_json};
+use crate::{AudioCodec, FrameMetadata};
 use dashmap::DashMap;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use tokio::sync::{self, Mutex};
+use tokio::sync::{self, Mutex, broadcast};
 use tokio::time::Duration;
 
 pub struct CommandRequest {
@@ -66,7 +66,8 @@ pub struct DVRIPCam {
 
     // Callbacks
     pub(crate) alarm_callback: Arc<Mutex<Option<AlarmCallback>>>,
-    pub(crate) frame_callback: Arc<Mutex<Option<FrameCallback>>>,
+    // pub(crate) frame_callback: Arc<Mutex<Option<FrameCallback>>>,
+    pub(crate) frame_sender: Arc<broadcast::Sender<(FrameMetadata, Vec<u8>)>>,
 
     // Background tasks
     pub(crate) keep_alive_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
@@ -89,6 +90,8 @@ impl DVRIPCam {
     pub fn new(ip: impl Into<String>) -> Self {
         let ip = ip.into();
 
+        let (tx, _s) = broadcast::channel(25);
+
         Self {
             ip,
             username: None,
@@ -96,7 +99,7 @@ impl DVRIPCam {
             codec: Arc::new(Mutex::new(None)),
             recv_handle: Arc::new(Mutex::new(None)),
             send_handle: Arc::new(Mutex::new(None)),
-            frame_callback: Arc::new(Mutex::new(None)),
+            frame_sender: Arc::new(tx),
             timeout: Duration::from_secs(10),
             connected: Arc::new(AtomicBool::new(false)),
             authenticated: Arc::new(AtomicBool::new(false)),
@@ -127,16 +130,16 @@ impl DVRIPCam {
     }
 
     pub async fn __handle_video(
-        frame_callback: Arc<tokio::sync::Mutex<Option<FrameCallback>>>,
+        frame_sender: Arc<broadcast::Sender<(FrameMetadata, Vec<u8>)>>,
         data: Vec<u8>,
     ) {
         let Ok((frame, metadata)) = DVRIPCam::read_bin_payload_static(data).await else {
             return;
         };
-        let Some(callback) = &*frame_callback.lock().await else {
-            return;
-        };
-        callback(frame, metadata);
+
+        frame_sender
+            .send((metadata, frame))
+            .expect("Failed to send frame");
     }
 
     pub async fn __handle_alarm(

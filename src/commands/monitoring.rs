@@ -5,8 +5,9 @@ use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use serde_json::json;
 use std::sync::atomic::Ordering;
+use tokio::sync::broadcast;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrameMetadata {
     pub width: Option<u32>,
     pub height: Option<u32>,
@@ -21,8 +22,11 @@ pub type FrameCallback = Box<dyn Fn(Vec<u8>, FrameMetadata) + Send + Sync>;
 #[async_trait]
 pub trait Monitoring: Send + Sync {
     /// Start video monitoring
-    async fn start_monitor(&self, callback: FrameCallback, stream: &str, channel: u8)
-    -> Result<()>;
+    async fn start_monitor(
+        &self,
+        stream: &str,
+        channel: u8,
+    ) -> Result<broadcast::Receiver<(FrameMetadata, Vec<u8>)>>;
 
     /// Stop video monitoring
     async fn stop_monitor(&self) -> Result<()>;
@@ -38,10 +42,9 @@ pub trait Monitoring: Send + Sync {
 impl Monitoring for DVRIPCam {
     async fn start_monitor(
         &self,
-        callback: FrameCallback,
         stream: &str,
         channel: u8,
-    ) -> Result<()> {
+    ) -> Result<broadcast::Receiver<(FrameMetadata, Vec<u8>)>> {
         let params = json!({
             "Channel": channel,
             "CombinMode": "NONE",
@@ -76,10 +79,7 @@ impl Monitoring for DVRIPCam {
         self.send_command(1410, start_data, false).await?;
         self.monitoring.store(true, Ordering::Release);
 
-        // Iniciar worker de monitoramento
-        *self.frame_callback.lock().await = Some(callback);
-
-        Ok(())
+        Ok(self.frame_sender.subscribe())
     }
 
     async fn stop_monitor(&self) -> Result<()> {

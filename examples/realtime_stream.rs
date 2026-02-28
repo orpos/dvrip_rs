@@ -26,20 +26,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting real-time stream...");
 
     // Define the frame callback
-    let callback = Box::new(|frame: Vec<u8>, metadata: dvrip_rs::FrameMetadata| {
-        println!(
-            "Received frame: {} bytes, Type: {:?}, MIME: {:?}, Size: {:?}x{:?}, Device Time: {:?}",
-            frame.len(),
-            metadata.frame_type.unwrap_or_else(|| "Unknown".to_string()),
-            metadata.media_type.unwrap_or_else(|| "Unknown".to_string()),
-            metadata.width.unwrap_or(0),
-            metadata.height.unwrap_or(0),
-            metadata.datetime
-        );
-    });
+    let callback = Box::new(|frame: Vec<u8>, metadata: dvrip_rs::FrameMetadata| {});
 
     // Start monitoring on channel 0, main stream ("Main")
-    cam.start_monitor(callback, "Main", 0).await?;
+    let mut data = cam.start_monitor("Main", 0).await?;
+
+    tokio::task::spawn(async move {
+        while let Ok((metadata, frame)) = data.recv().await {
+            println!(
+                "Received frame: {} bytes, Type: {:?}, MIME: {:?}, Size: {:?}x{:?}, Device Time: {:?}",
+                frame.len(),
+                metadata.frame_type.unwrap_or_else(|| "Unknown".to_string()),
+                metadata.media_type.unwrap_or_else(|| "Unknown".to_string()),
+                metadata.width.unwrap_or(0),
+                metadata.height.unwrap_or(0),
+                metadata.datetime
+            );
+        }
+    });
 
     println!("Receiving frames for 15 seconds. Press Ctrl+C to stop early.");
     tokio::time::sleep(Duration::from_secs(15)).await;

@@ -52,7 +52,7 @@ impl Connection for DVRIPCam {
 
         let ptr_1 = Arc::clone(&message_handlers);
         let alarm_callback = Arc::clone(&self.alarm_callback);
-        let frame_callback = Arc::clone(&self.frame_callback);
+        let frame_channel = Arc::clone(&self.frame_sender);
         let monitoring = Arc::clone(&self.alarm_monitoring);
         let video_monitoring = Arc::clone(&self.monitoring);
         let stream_handlers = Arc::clone(&self.stream_handlers);
@@ -72,7 +72,7 @@ impl Connection for DVRIPCam {
                     .expect("Error reading packet data");
 
                 if decoded_header.msg_id == 1412 && video_monitoring.load(Ordering::Acquire) {
-                    DVRIPCam::__handle_video(Arc::clone(&frame_callback), data).await;
+                    DVRIPCam::__handle_video(frame_channel.clone(), data).await;
                     continue;
                 }
 
