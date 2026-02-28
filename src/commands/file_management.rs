@@ -1,5 +1,5 @@
-use crate::dvrip::DVRIPCam;
 use crate::error::Result;
+use crate::{DVRIPError, dvrip::DVRIPCam};
 use async_trait::async_trait;
 use chrono::{DateTime, Local};
 use serde_json::{Value, json};
@@ -24,6 +24,15 @@ pub trait FileManagement: Send + Sync {
         end_time: DateTime<Local>,
         filename: &str,
         target_path: &str,
+    ) -> Result<()>;
+
+    /// Streams a file from the device
+    async fn stream_file(
+        &self,
+        start_time: DateTime<Local>,
+        end_time: DateTime<Local>,
+        filename: &str,
+        receiver: tokio::sync::mpsc::Sender<Vec<u8>>,
     ) -> Result<()>;
 }
 
@@ -114,6 +123,100 @@ impl FileManagement for DVRIPCam {
         Ok(result)
     }
 
+    async fn stream_file(
+        &self,
+        start_time: DateTime<Local>,
+        end_time: DateTime<Local>,
+        filename: &str,
+        receiver: tokio::sync::mpsc::Sender<Vec<u8>>,
+    ) -> Result<()> {
+        let start_str = start_time.format("%Y-%m-%d %H:%M:%S").to_string();
+        let end_str = end_time.format("%Y-%m-%d %H:%M:%S").to_string();
+
+        // Claim
+        let claim_data = json!({
+            "Name": "OPPlayBack",
+            "OPPlayBack": {
+                "Action": "Claim",
+                "Parameter": {
+                    "PlayMode": "ByName",
+                    "FileName": filename,
+                    "StreamType": 0,
+                    "Value": 0,
+                    "TransMode": "TCP",
+                },
+                "StartTime": start_str,
+                "EndTime": end_str,
+            },
+        });
+
+        self.send_command(1424, claim_data, true).await?;
+
+        // Prepare stream listener
+        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+        let stream_ids = [0x1FC, 0x1FD, 0x1FA, 0x1F9, 0x5FC, 0x0592]; // Standard media + explicit stream ID
+        for &id in &stream_ids {
+            self.stream_handlers.insert(id, tx.clone());
+        }
+
+        // DownloadStart
+        let download_start_data = json!({
+            "Name": "OPPlayBack",
+            "OPPlayBack": {
+                "Action": "DownloadStart",
+                "Parameter": {
+                    "PlayMode": "ByName",
+                    "FileName": filename,
+                    "StreamType": 0,
+                    "Value": 0,
+                    "TransMode": "TCP",
+                },
+                "StartTime": start_str,
+                "EndTime": end_str,
+            },
+        });
+
+        self.send_command(1420, download_start_data, false).await?;
+
+        while let Some((header, data)) = rx.recv().await {
+            if header.data_len == 0 {
+                break;
+            }
+            receiver
+                .send(data)
+                .await
+                .map_err(|_| DVRIPError::Unknown("Failed to send".to_string()))?;
+        }
+
+        // Cleanup handlers
+        for &id in &stream_ids {
+            self.stream_handlers.remove(&id);
+        }
+
+        // DownloadStop
+        let download_stop_data = json!({
+            "Name": "OPPlayBack",
+            "OPPlayBack": {
+                "Action": "DownloadStop",
+                "Parameter": {
+                    "FileName": filename,
+                    "PlayMode": "ByName",
+                    "StreamType": 0,
+                    "TransMode": "TCP",
+                    "Channel": 0,
+                    "Value": 0,
+                },
+                "StartTime": start_str,
+                "EndTime": end_str,
+            },
+        });
+
+        self.send_command(1420, download_stop_data, false).await?;
+
+        Ok(())
+    }
+
+    // TODO: migrate this to use stream_file
     async fn download_file(
         &self,
         start_time: DateTime<Local>,

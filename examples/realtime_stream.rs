@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     println!("Receiving frames for 15 seconds. Press Ctrl+C to stop early.");
-    tokio::time::sleep(Duration::from_secs(15)).await;
+    tokio::time::sleep(Duration::from_secs(50)).await;
 
     println!("Stopping stream...");
     cam.stop_monitor().await?;
